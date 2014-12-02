@@ -23,6 +23,9 @@
 #ifndef TYPES_H
 #define TYPES_H
 
+/* Need this as that is where these flags are defined */
+#include "config.h"
+
 #include <stddef.h>
 #ifdef HAVE_SYS_TYPES_H
 #include <sys/types.h>
