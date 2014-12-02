@@ -2,8 +2,8 @@ include $(top_srcdir)/common.mk
 
 METASOURCES = AUTO
 noinst_LTLIBRARIES = libserver.la
-noinst_HEADERS = server.h telnet_server.h gdb_server.h
-libserver_la_SOURCES = server.c telnet_server.c gdb_server.c
+noinst_HEADERS = server.h telnet_server.h gdb_server.h dcc_server.h
+libserver_la_SOURCES = server.c telnet_server.c gdb_server.c dcc_server.c
 
 libserver_la_SOURCES += server_stubs.c
 

@@ -35,6 +35,7 @@
 #include "openocd.h"
 #include "tcl_server.h"
 #include "telnet_server.h"
+#include "dcc_server.h"
 
 #include <signal.h>
 
@@ -547,7 +548,11 @@ int server_init(struct command_context *cmd_ctx)
 	if (ERROR_OK != ret)
 		return ret;
 
-	return telnet_init("Open On-Chip Debugger");
+	ret = telnet_init ("Open On-Chip Debugger");
+	if (ERROR_OK != ret)
+	  return ret;
+
+	return dcc_server_init();
 }
 
 int server_quit(void)

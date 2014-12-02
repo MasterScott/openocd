@@ -42,6 +42,7 @@
 
 #include <server/server.h>
 #include <server/gdb_server.h>
+#include <server/dcc_server.h>
 
 #ifdef HAVE_STRINGS_H
 #include <strings.h>
@@ -249,6 +250,7 @@ struct command_context *setup_command_handler(Jim_Interp *interp)
 		&nand_register_commands,
 		&pld_register_commands,
 		&mflash_register_commands,
+		&dcc_server_register_commands,
 		NULL
 	};
 	for (unsigned i = 0; NULL != command_registrants[i]; i++) {
