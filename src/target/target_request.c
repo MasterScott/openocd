@@ -30,6 +30,7 @@
 
 #include <helper/log.h>
 #include <helper/binarybuffer.h>
+#include <server/dcc_server.h>
 
 #include "target.h"
 #include "target_request.h"
@@ -61,6 +62,20 @@ static int target_asciimsg(struct target *target, uint32_t length)
 		command_print(c->cmd_ctx, "%s", msg);
 		c = c->next;
 	}
+
+	return ERROR_OK;
+}
+
+static int target_rawpipe(struct target *target, uint32_t length)
+{
+	char *data = malloc(DIV_ROUND_UP(length + 1, 4) * 4);
+
+	// Get the rest of the packet
+	target->type->target_request_data(target, DIV_ROUND_UP(length, 4), (uint8_t *)data);
+
+	// If connection exists forward over dcc socket
+	if (target->dcc_connection)
+	  dcc_server_socket_write (target->dcc_connection, data, length);
 
 	return ERROR_OK;
 }
@@ -145,6 +160,9 @@ int target_request(struct target *target, uint32_t request)
 		case TARGET_REQ_DEBUGCHAR:
 			target_charmsg(target, (request & 0x00ff0000) >> 16);
 			break;
+	        case TARGET_REQ_RAWPIPE:
+		  target_rawpipe(target, (request >> 16) & 0xffff);
+		  break;
 /*		case TARGET_REQ_SEMIHOSTING:
  *			break;
  */

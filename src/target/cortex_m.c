@@ -42,6 +42,10 @@
 #include "arm_semihosting.h"
 #include <helper/time_support.h>
 
+// Fix: Target should not reference DCC server data structure directly
+#include <server/dcc_server.h>
+#include <helper/list.h>
+
 /* NOTE:  most of this should work fine for the Cortex-M1 and
  * Cortex-M0 cores too, although they're ARMv6-M not ARMv7-M.
  * Some differences:  M0/M1 doesn't have FBP remapping or the
@@ -1877,7 +1881,34 @@ int cortex_m_examine(struct target *target)
 	return ERROR_OK;
 }
 
-static int cortex_m_dcc_read(struct target *target, uint8_t *value, uint8_t *ctrl)
+static int cortex_m_dcc_write(struct target *target, uint8_t value)
+{
+	struct armv7m_common *armv7m = target_to_armv7m(target);
+	struct adiv5_dap *swjdp = armv7m->arm.dap;
+	uint8_t buf[2];
+	int retval;
+
+ retry:
+	retval = mem_ap_read(swjdp, buf, 1, 1, DCB_DCRDR + 2, false);
+	if (retval != ERROR_OK)
+		return retval;
+
+	// Retry until bit is clear
+	if (buf[0] & (1 << 0))
+	  goto retry;
+	
+	// Save value into buffer and set flag
+	target_buffer_set_u16(target, buf, value << 8 | 1);
+
+	// Write value into register
+	retval = mem_ap_write(swjdp, buf, 2, 1, DCB_DCRDR + 2, false);
+	if (retval != ERROR_OK)
+	  return retval;
+
+	return ERROR_OK;
+}
+
+static int cortex_m_dcc_read(struct target *target, uint8_t *value, uint8_t *ctrl, bool poll_flag)
 {
 	struct armv7m_common *armv7m = target_to_armv7m(target);
 	struct adiv5_dap *swjdp = armv7m->arm.dap;
@@ -1885,10 +1916,15 @@ static int cortex_m_dcc_read(struct target *target, uint8_t *value, uint8_t *ctr
 	uint8_t buf[2];
 	int retval;
 
+ retry:
 	retval = mem_ap_read(swjdp, buf, 2, 1, DCB_DCRDR, false);
 	if (retval != ERROR_OK)
 		return retval;
 
+	// If not polling retry until flag is set
+	if (!poll_flag && ((buf[0] & (1 << 0)) == 0))
+	  goto retry;
+	  
 	dcrdr = target_buffer_get_u16(target, buf);
 	*ctrl = (uint8_t)dcrdr;
 	*value = (uint8_t)(dcrdr >> 8);
@@ -1915,7 +1951,7 @@ static int cortex_m_target_request_data(struct target *target,
 	uint32_t i;
 
 	for (i = 0; i < (size * 4); i++) {
-		int retval = cortex_m_dcc_read(target, &data, &ctrl);
+	  int retval = cortex_m_dcc_read(target, &data, &ctrl, false);
 		if (retval != ERROR_OK)
 			return retval;
 		buffer[i] = data;
@@ -1938,7 +1974,8 @@ static int cortex_m_handle_target_request(void *priv)
 		uint8_t ctrl;
 		int retval;
 
-		retval = cortex_m_dcc_read(target, &data, &ctrl);
+		/* Poll to see if data is available */
+		retval = cortex_m_dcc_read(target, &data, &ctrl, true);
 		if (retval != ERROR_OK)
 			return retval;
 
@@ -1949,12 +1986,37 @@ static int cortex_m_handle_target_request(void *priv)
 			/* we assume target is quick enough */
 			request = data;
 			for (int i = 1; i <= 3; i++) {
-				retval = cortex_m_dcc_read(target, &data, &ctrl);
+			  retval = cortex_m_dcc_read(target, &data, &ctrl, false);
 				if (retval != ERROR_OK)
 					return retval;
 				request |= ((uint32_t)data << (i * 8));
 			}
 			target_request(target, request);
+		}
+
+		/* Check to see if any msgs are queued for target */
+		if (target->dcc_connection && !list_empty(&target->dcc_connection->pkt_list)) {
+		  int i;
+
+		  // Get next packet
+		  struct dcc_packet_t *pkt = list_entry(target->dcc_connection->pkt_list.next,
+							struct dcc_packet_t, list);
+
+		  // Write pkt out to dcc
+		  // Write out length first
+		  cortex_m_dcc_write(target, (pkt->len >> 8) & 0xff);
+		  cortex_m_dcc_write(target, pkt->len & 0xff);
+
+		  // Now write data
+		  for (i = 0; i < pkt->len; i++)
+		    cortex_m_dcc_write(target, pkt->buf[i]);
+
+		  // Remove from list
+		  list_del(&pkt->list);
+
+		  // Free pkt buf and pkt
+		  free(pkt->buf);
+		  free(pkt);
 		}
 	}
 

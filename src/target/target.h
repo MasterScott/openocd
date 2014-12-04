@@ -195,6 +195,9 @@ struct target {
 
 	/* file-I/O information for host to do syscall */
 	struct gdb_fileio_info *fileio_info;
+
+  /* DCC server connection */
+  struct dcc_connection *dcc_connection;
 };
 
 struct target_list {

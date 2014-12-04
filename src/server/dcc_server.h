@@ -27,16 +27,32 @@
 #include <netinet/in.h>
 
 #include <helper/command.h>
+#include <helper/list.h>
 #include "server.h"
 
 // DCC input buffer size
-#define DCC_BUFFER_SIZE    (127)
+#define DCC_BUFFER_SIZE    (256)
+
+// DCC connection
+struct dcc_connection {
+  bool              enabled;
+  bool              closed;
+  struct connection *cnx;
+  struct list_head  pkt_list;
+};
+
+// DCC incoming packets (from socket)
+struct dcc_packet_t {
+  struct list_head list;
+  char             *buf;
+  int              len;
+};
 
 /* Register dcc related commands */
-int dcc_server_register_commands(struct command_context *command_context);
+int dcc_server_register_commands(struct command_context *ctx);
 
-/* Write a packet to target */
-int dcc_server_put_packet(struct connection *connection, char *buffer, int len);
+/* Write a packet to socket from target */
+int dcc_server_socket_write(struct dcc_connection *cnx, void *buf, int len);
 
 /* Initialize dcc server */
 int dcc_server_init (void);

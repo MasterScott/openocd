@@ -23,45 +23,26 @@
 #include <string.h>
 #include <stdbool.h>
 #include <helper/list.h>
+#include <target/target.h>
 
 // Listening port
 static char *dcc_port;
 
-// Connection variables
-struct dcc_connection {
-  bool             enabled;
-  bool             closed;
-  struct list_head pkt_list;
-};
 
-struct dcc_packet {
-  char              *buf;
-  int               len;
-  struct list_head  list;
-};
-
-int dcc_server_put_packet(struct connection *connection, char *buffer, int len)
+int dcc_server_socket_write (struct dcc_connection *dcc_cnx, void *data, int len)
 {
-  return ERROR_OK;
-}
-
-static int dcc_socket_write (struct connection *connection, const void *data,
-			     int len)
-{
-  struct dcc_connection *dcc_cnx = connection->priv;
-
+  
   if (dcc_cnx->closed)
     return ERROR_SERVER_REMOTE_CLOSED;
 
   // Try to write to socket
-  if (connection_write(connection, data, len) == len)
+  if (connection_write(dcc_cnx->cnx, data, len) == len)
     return ERROR_OK;
 
   // Else connection must have been closed
   dcc_cnx->closed = true;
   return ERROR_SERVER_REMOTE_CLOSED;
 }
-
 
 /*
  * Handle DCC connection related callbacks
@@ -76,27 +57,30 @@ static int dcc_new_connection(struct connection *cnx)
   // Create port
   dcc_cnx->enabled = true;
   dcc_cnx->closed = false;
+  dcc_cnx->cnx = cnx;
   INIT_LIST_HEAD (&dcc_cnx->pkt_list);
 
   // Save into connection
   cnx->priv = dcc_cnx;
 
-  // Write out to socket
-  dcc_socket_write (cnx, "Hello\r\n", 7);
+  // TODO: Fix... This is not very clean. How do I tie target
+  // back to dcc server so target_request can forward data to socket?
+  all_targets->dcc_connection = dcc_cnx;
+
   return ERROR_OK;
 }
 
 static int dcc_input(struct connection *cnx)
 {
   int rv;
-  struct dcc_packet *dcc_pkt;
+  struct dcc_packet_t *dcc_pkt;
   struct dcc_connection *dcc_cnx;
 
   // Get specific connection data
   dcc_cnx = cnx->priv;
 
   // Malloc a packet and buffer
-  dcc_pkt = malloc(sizeof(struct dcc_packet));
+  dcc_pkt = malloc(sizeof(struct dcc_packet_t));
   if (dcc_pkt == NULL)
     return ERROR_FAIL;
   dcc_pkt->buf = malloc (DCC_BUFFER_SIZE);
@@ -127,6 +111,12 @@ static int dcc_input(struct connection *cnx)
 
 static int dcc_connection_closed(struct connection *cnx)
 {
+  // Flush any packets available
+
+  // TODO: Fix... This is not very clean. How do I tie target
+  // back to dcc server so target_request can forward data to socket?
+  all_targets->dcc_connection = NULL;
+
   return ERROR_OK;
 }
 
