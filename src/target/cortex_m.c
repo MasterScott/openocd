@@ -1995,7 +1995,8 @@ static int cortex_m_handle_target_request(void *priv)
 		}
 
 		/* Check to see if any msgs are queued for target */
-		if (target->dcc_connection && !list_empty(&target->dcc_connection->pkt_list)) {
+		if (target->dcc_connection &&
+		    !list_empty(&target->dcc_connection->pkt_list)) {
 		  int i;
 
 		  // Get next packet

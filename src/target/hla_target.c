@@ -41,6 +41,10 @@
 #include "arm_semihosting.h"
 #include "target_request.h"
 
+// Fix: Target should not reference DCC server directly
+#include <server/dcc_server.h>
+#include <helper/list.h>
+
 #define savedDCRDR  dbgbase  /* FIXME: using target->dbgbase to preserve DCRDR */
 
 #define ARMV7M_SCS_DCRSR	DCB_DCRSR
@@ -256,12 +260,20 @@ static int adapter_examine_debug_reason(struct target *target)
 	return ERROR_OK;
 }
 
-static int hl_dcc_read(struct hl_interface_s *hl_if, uint8_t *value, uint8_t *ctrl)
+static int hl_dcc_read(struct hl_interface_s *hl_if, uint8_t *value,
+		       uint8_t *ctrl, bool poll_flag)
 {
 	uint16_t dcrdr;
-	int retval = hl_if->layout->api->read_mem(hl_if->handle,
-			DCB_DCRDR, 1, sizeof(dcrdr), (uint8_t *)&dcrdr);
+	int retval;
+
+ retry:
+	retval = hl_if->layout->api->read_mem(hl_if->handle,
+					      DCB_DCRDR, 1, sizeof(dcrdr), (uint8_t *)&dcrdr);
 	if (retval == ERROR_OK) {
+
+	  if (!poll_flag && ((dcrdr & 1) == 0))
+	    goto retry;
+
 	    *ctrl = (uint8_t)dcrdr;
 	    *value = (uint8_t)(dcrdr >> 8);
 
@@ -278,6 +290,30 @@ static int hl_dcc_read(struct hl_interface_s *hl_if, uint8_t *value, uint8_t *ct
 	return retval;
 }
 
+static int hl_dcc_write(struct hl_interface_s *hl_if, uint8_t value)
+{
+	int retval;
+	uint8_t buf[2];
+
+ retry:
+	retval = hl_if->layout->api->read_mem(hl_if->handle, DCB_DCRDR + 2, 1, 
+					      1, buf);
+	if (retval == ERROR_OK) {
+
+	  // Keep reading until bit is clear
+	  if (buf[0] & (1 << 0))
+	    goto retry;
+
+	  // Set data
+	  buf[1] = value;
+	  buf[0] = 1;     // Data ready flag
+
+	  // Write data back out
+	  retval = hl_if->layout->api->write_mem(hl_if->handle, DCB_DCRDR + 2, 1, 2, buf);
+	}
+	return retval;
+}
+
 static int hl_target_request_data(struct target *target,
 	uint32_t size, uint8_t *buffer)
 {
@@ -287,7 +323,7 @@ static int hl_target_request_data(struct target *target,
 	uint32_t i;
 
 	for (i = 0; i < (size * 4); i++) {
-		hl_dcc_read(hl_if, &data, &ctrl);
+	  hl_dcc_read(hl_if, &data, &ctrl, false);
 		buffer[i] = data;
 	}
 
@@ -308,7 +344,7 @@ static int hl_handle_target_request(void *priv)
 		uint8_t data;
 		uint8_t ctrl;
 
-		hl_dcc_read(hl_if, &data, &ctrl);
+		hl_dcc_read(hl_if, &data, &ctrl, true);
 
 		/* check if we have data */
 		if (ctrl & (1 << 0)) {
@@ -316,13 +352,38 @@ static int hl_handle_target_request(void *priv)
 
 			/* we assume target is quick enough */
 			request = data;
-			hl_dcc_read(hl_if, &data, &ctrl);
+			hl_dcc_read(hl_if, &data, &ctrl, false);
 			request |= (data << 8);
-			hl_dcc_read(hl_if, &data, &ctrl);
+			hl_dcc_read(hl_if, &data, &ctrl, false);
 			request |= (data << 16);
-			hl_dcc_read(hl_if, &data, &ctrl);
+			hl_dcc_read(hl_if, &data, &ctrl, false);
 			request |= (data << 24);
 			target_request(target, request);
+		}
+
+		/* Check if messages are queued for target */
+		if (target->dcc_connection &&
+		    !list_empty (&target->dcc_connection->pkt_list)) {
+		  int i;
+
+		  // Get next packet
+		  struct dcc_packet_t *pkt = list_entry (target->dcc_connection->pkt_list.next,
+							 struct dcc_packet_t, list);
+
+		  // Write length out to dcc
+		  hl_dcc_write (hl_if, (pkt->len >> 8) & 0xff);
+		  hl_dcc_write (hl_if, pkt->len & 0xff);
+
+		  // Write data out
+		  for (i = 0; i < pkt->len; i++)
+		    hl_dcc_write (hl_if, pkt->buf[i]);
+
+		  // Remove from list
+		  list_del (&pkt->list);
+		  
+		  // Free buffer and packet
+		  free (pkt->buf);
+		  free (pkt);
 		}
 	}
 
