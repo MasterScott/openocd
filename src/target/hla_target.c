@@ -293,23 +293,23 @@ static int hl_dcc_read(struct hl_interface_s *hl_if, uint8_t *value,
 static int hl_dcc_write(struct hl_interface_s *hl_if, uint8_t value)
 {
 	int retval;
-	uint8_t buf[2];
-
+	uint8_t buf[4];
+	uint32_t dcrdr;
  retry:
-	retval = hl_if->layout->api->read_mem(hl_if->handle, DCB_DCRDR + 2, 1, 
-					      1, buf);
+	retval = hl_if->layout->api->read_mem(hl_if->handle, DCB_DCRDR, 4, 1, buf);
 	if (retval == ERROR_OK) {
 
 	  // Keep reading until bit is clear
-	  if (buf[0] & (1 << 0))
+	  if (buf[2] & (1 << 0))
 	    goto retry;
 
 	  // Set data
-	  buf[1] = value;
-	  buf[0] = 1;     // Data ready flag
+	  buf[3] = value;
+	  buf[2] = 1;     // Data ready flag
 
 	  // Write data back out
-	  retval = hl_if->layout->api->write_mem(hl_if->handle, DCB_DCRDR + 2, 1, 2, buf);
+	  dcrdr = (buf[3] << 24) | (buf[2] << 16) | (buf[1] << 8) | buf[0];
+	  retval = hl_if->layout->api->write_debug_reg(hl_if->handle, DCB_DCRDR, dcrdr);
 	}
 	return retval;
 }
@@ -616,6 +616,8 @@ static int adapter_assert_reset(struct target *target)
 
 static int adapter_deassert_reset(struct target *target)
 {
+  int rv;
+  uint32_t val;
 	struct hl_interface_s *adapter = target_to_adapter(target);
 
 	enum reset_types jtag_reset_config = jtag_get_reset_config();
@@ -632,6 +634,18 @@ static int adapter_deassert_reset(struct target *target)
 
 	target->savedDCRDR = 0;  /* clear both DCC busy bits on initial resume */
 
+	// Check if DCRDR is not zero
+	rv = target_read_u32 (target, DCB_DCRDR, &val);
+	if (rv != ERROR_OK)
+	  return rv;
+
+	// Clear if set
+	if (val) {
+	  rv = target_write_u32 (target, DCB_DCRDR, 0);
+	  if (rv != ERROR_OK)
+	    return rv;
+	}
+	
 	return target->reset_halt ? ERROR_OK : target_resume(target, 1, 0, 0, 0);
 }
 
